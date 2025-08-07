@@ -500,7 +500,6 @@ class CallToolsNode(AgentNode[DepsT, NodeRunEndT]):
                                     return
 
                     # If there are no preceding model responses, we prompt the model to try again and provide actionable output.
-                    breakpoint()
                     if retry_request := _create_thinking_retry_request(self.model_response.parts):
                         self._next_node = ModelRequestNode[DepsT, NodeRunEndT](request=retry_request)
                         return
