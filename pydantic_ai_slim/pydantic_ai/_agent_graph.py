@@ -448,7 +448,7 @@ class CallToolsNode(AgentNode[DepsT, NodeRunEndT]):
         async for _event in stream:
             pass
 
-    async def _run_stream(
+    async def _run_stream(  # noqa: C901
         self, ctx: GraphRunContext[GraphAgentState, GraphAgentDeps[DepsT, NodeRunEndT]]
     ) -> AsyncIterator[_messages.HandleResponseEvent]:
         if self._events_iterator is None:
@@ -511,57 +511,6 @@ class CallToolsNode(AgentNode[DepsT, NodeRunEndT]):
 
         async for event in self._events_iterator:
             yield event
-
-    async def _create_stream_iterator(
-        self, ctx: GraphRunContext[GraphAgentState, GraphAgentDeps[DepsT, NodeRunEndT]]
-    ) -> AsyncIterator[_messages.HandleResponseEvent]:
-        texts: list[str] = []
-        tool_calls: list[_messages.ToolCallPart] = []
-
-        # Process all parts in the model response
-        async for event in _process_response_parts(self.model_response.parts, texts, tool_calls):
-            yield event
-
-        # Handle the response based on what we found
-        if tool_calls:
-            async for event in self._handle_tool_calls(ctx, tool_calls):
-                yield event
-        elif texts:
-            # No events are emitted during the handling of text responses, so we don't need to yield anything
-            self._next_node = await self._handle_text_response(ctx, texts)
-        else:
-            self._next_node = await self._handle_empty_response(ctx)
-
-    async def _handle_empty_response(
-        self, ctx: GraphRunContext[GraphAgentState, GraphAgentDeps[DepsT, NodeRunEndT]]
-    ) -> ModelRequestNode[DepsT, NodeRunEndT] | End[result.FinalResult[NodeRunEndT]]:
-        # Handle thinking-only responses (responses that contain only ThinkingPart instances)
-        # This can happen with models that support thinking mode when they don't provide
-        # actionable output alongside their thinking content.
-        thinking_parts = [p for p in self.model_response.parts if isinstance(p, _messages.ThinkingPart)]
-
-        if thinking_parts and not _is_retry_attempt(ctx):
-            return await _create_thinking_retry(ctx)
-
-        # Original recovery logic - this sometimes happens with anthropic (and perhaps other models)
-        # when the model has already returned text along side tool calls
-        # in this scenario, if text responses are allowed, we return text from the most recent model
-        # response, if any
-        if isinstance(ctx.deps.output_schema, _output.TextOutputSchema):
-            if next_node := await self._try_recover_from_history(ctx):
-                return next_node
-
-        raise exceptions.UnexpectedModelBehavior('Received empty model response')
-
-    async def _try_recover_from_history(
-        self, ctx: GraphRunContext[GraphAgentState, GraphAgentDeps[DepsT, NodeRunEndT]]
-    ) -> ModelRequestNode[DepsT, NodeRunEndT] | End[result.FinalResult[NodeRunEndT]] | None:
-        for message in reversed(ctx.state.message_history):
-            if isinstance(message, _messages.ModelResponse):
-                last_texts = [p.content for p in message.parts if isinstance(p, _messages.TextPart)]
-                if last_texts:
-                    return await self._handle_text_response(ctx, last_texts)
-        return None
 
     async def _handle_tool_calls(
         self,
