@@ -26,6 +26,7 @@ from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
     ModelResponse,
+    ModelResponsePart,
     PartDeltaEvent,
     PartStartEvent,
     RetryPromptPart,
@@ -1740,3 +1741,70 @@ async def test_google_vertexai_model_usage_limit_exceeded(allow_model_requests: 
             'What is the largest city in the user country? Use the get_user_country tool and then your own world knowledge.',
             usage_limits=UsageLimits(total_tokens_limit=9, count_tokens_before_request=True),
         )
+
+
+@pytest.mark.parametrize(
+    'model_parts,expected_contents',
+    [
+        pytest.param(
+            [ToolCallPart(tool_name='test_tool', args={'param': 'value'}, tool_call_id='call_123')],
+            [
+                {
+                    'role': 'model',
+                    'parts': [
+                        {
+                            'function_call': {
+                                'args': {'param': 'value'},
+                                'id': 'call_123',
+                                'name': 'test_tool',
+                            }
+                        },
+                        {'text': 'I have completed the function calls above.'},
+                    ],
+                }
+            ],
+            id='function_call_without_text',
+        ),
+        pytest.param(
+            [],
+            [],
+            id='empty_response_parts',
+        ),
+        pytest.param(
+            [
+                ToolCallPart(tool_name='test_tool', args={'param': 'value'}, tool_call_id='call_123'),
+                TextPart(content='Here is the result:'),
+            ],
+            [
+                {
+                    'role': 'model',
+                    'parts': [
+                        {
+                            'function_call': {
+                                'args': {'param': 'value'},
+                                'id': 'call_123',
+                                'name': 'test_tool',
+                            }
+                        },
+                        {'text': 'Here is the result:'},
+                    ],
+                }
+            ],
+            id='function_call_with_text',
+        ),
+    ],
+)
+async def test_google_model_response_part_handling(
+    google_provider: GoogleProvider, model_parts: list[ModelResponsePart], expected_contents: list[dict[str, Any]]
+):
+    """Test Google model's handling of different response part combinations for API compatibility."""
+    model = GoogleModel('gemini-2.0-flash', provider=google_provider)
+
+    model_response = ModelResponse(
+        parts=model_parts,
+        usage=Usage(requests=1, request_tokens=10, response_tokens=5, total_tokens=15),
+        model_name='gemini-2.0-flash',
+    )
+
+    _, contents = await model._map_messages([model_response])  # pyright: ignore[reportPrivateUsage]
+    assert contents == expected_contents
