@@ -1416,25 +1416,14 @@ async def test_google_model_function_call_without_text(google_provider: GooglePr
     messages = [model_response]
     _, contents = await model._map_messages(list(messages))  # pyright: ignore[reportPrivateUsage]
 
-    # Due to the bug in the implementation, there are two content items:
-    # 1. The original (without added text)
-    # 2. The modified one (with added text)
-    assert len(contents) == 2
+    # Should have exactly one content item with the function call and added text
+    assert len(contents) == 1
 
-    # The first content should be the unmodified original
-    original_content = contents[0]
-    assert isinstance(original_content, dict)
-    assert original_content.get('role') == 'model'
-    parts = original_content.get('parts', [])
-    assert isinstance(parts, list)
-    assert len(parts) == 1
-    assert 'function_call' in parts[0]
-
-    # The second content should have the added text
-    modified_content = contents[1]
-    assert isinstance(modified_content, dict)
-    assert modified_content.get('role') == 'model'
-    parts = modified_content.get('parts', [])
+    # The content should have the added text along with the function call
+    content = contents[0]
+    assert isinstance(content, dict)
+    assert content.get('role') == 'model'
+    parts = content.get('parts', [])
     assert isinstance(parts, list)
     assert len(parts) == 2
 
