@@ -1,8 +1,11 @@
 from __future__ import annotations as _annotations
 
 import datetime
+import json
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from httpx import Timeout
@@ -39,7 +42,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
     VideoUrl,
 )
-from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.output import NativeOutput, PromptedOutput, TextOutput, ToolOutput
 from pydantic_ai.result import Usage, UsageLimits
 from pydantic_ai.settings import ModelSettings
@@ -1740,3 +1744,142 @@ async def test_google_model_function_call_without_text(google_provider: GooglePr
     # Second part should be the added minimal text
     assert 'text' in parts[1]
     assert parts[1]['text'] == 'I have completed the function calls above.'
+
+
+@dataclass
+class JsonRetryTestCase:
+    """Test case for JSON retry scenarios."""
+
+    id: str
+    side_effect: list[json.JSONDecodeError | Mock]
+    settings: GoogleModelSettings
+    expected_exception: type[Exception] | None
+    expected_call_count: int
+    expected_sleep_count: int
+    expected_sleep_calls: list[float]
+    expected_result: str | None
+
+
+@pytest.mark.parametrize(
+    'test_case',
+    [
+        JsonRetryTestCase(
+            id='success_after_retry',
+            side_effect=[json.JSONDecodeError('test error', 'doc', 0), Mock()],
+            settings=cast(GoogleModelSettings, {}),
+            expected_exception=None,
+            expected_call_count=2,
+            expected_sleep_count=1,
+            expected_sleep_calls=[1.0],
+            expected_result='success',
+        ),
+        JsonRetryTestCase(
+            id='max_attempts_reached',
+            side_effect=[json.JSONDecodeError('test error', 'doc', 0), json.JSONDecodeError('test error', 'doc', 0)],
+            settings=cast(GoogleModelSettings, {'google_json_retry_max_attempts': 2}),
+            expected_exception=json.JSONDecodeError,
+            expected_call_count=2,
+            expected_sleep_count=2,
+            expected_sleep_calls=[1.0, 2.0],
+            expected_result=None,
+        ),
+        JsonRetryTestCase(
+            id='custom_settings',
+            side_effect=[json.JSONDecodeError('test error', 'doc', 0), Mock()],
+            settings=cast(
+                GoogleModelSettings, {'google_json_retry_max_attempts': 5, 'google_json_retry_base_delay': 0.5}
+            ),
+            expected_exception=None,
+            expected_call_count=2,
+            expected_sleep_count=1,
+            expected_sleep_calls=[0.5],
+            expected_result='success',
+        ),
+        JsonRetryTestCase(
+            id='retry_disabled',
+            side_effect=[json.JSONDecodeError('test error', 'doc', 0)],
+            settings=cast(GoogleModelSettings, {'google_json_retry_max_attempts': 0}),
+            expected_exception=UnexpectedModelBehavior,
+            expected_call_count=0,
+            expected_sleep_count=0,
+            expected_sleep_calls=[],
+            expected_result=None,
+        ),
+    ],
+    ids=lambda test_case: test_case.id,
+)
+async def test_google_model_json_retry_scenarios(
+    google_provider: GoogleProvider,
+    test_case: JsonRetryTestCase,
+):
+    """Test various JSON retry scenarios with parameterized inputs."""
+    model = GoogleModel('gemini-1.5-flash', provider=google_provider)
+
+    # Create mock response for success cases
+    expected_result = test_case.expected_result
+    side_effect = test_case.side_effect
+    if expected_result == 'success':
+        mock_response = Mock()
+        if isinstance(side_effect, list):
+            side_effect[1] = mock_response  # Replace placeholder with actual mock
+        expected_result = mock_response
+
+    mock_func = AsyncMock()
+    mock_func.side_effect = side_effect
+
+    with patch.object(model.client.aio.models, 'generate_content', mock_func):
+        with patch('asyncio.sleep') as mock_sleep:
+            if test_case.expected_exception:
+                with pytest.raises(test_case.expected_exception):
+                    await model._generate_content(  # pyright: ignore[reportPrivateUsage]
+                        messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
+                        stream=False,
+                        model_settings=test_case.settings,
+                        model_request_parameters=ModelRequestParameters(
+                            function_tools=[], output_tools=[], allow_text_output=True
+                        ),
+                    )
+            else:
+                result = await model._generate_content(  # pyright: ignore[reportPrivateUsage]
+                    messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
+                    stream=False,
+                    model_settings=test_case.settings,
+                    model_request_parameters=ModelRequestParameters(
+                        function_tools=[], output_tools=[], allow_text_output=True
+                    ),
+                )
+                assert result == expected_result
+
+            # Verify call counts
+            assert mock_func.call_count == test_case.expected_call_count
+            assert mock_sleep.call_count == test_case.expected_sleep_count
+
+            # Verify sleep calls
+            for expected_delay in test_case.expected_sleep_calls:
+                mock_sleep.assert_any_call(expected_delay)
+
+
+async def test_google_model_non_json_error_not_retried(google_provider: GoogleProvider):
+    """Test that non-JSON errors are not retried."""
+    model = GoogleModel('gemini-1.5-flash', provider=google_provider)
+
+    # Mock the Google client to raise a different type of error
+    mock_func = AsyncMock()
+    mock_func.side_effect = ValueError('some other error')
+
+    with patch.object(model.client.aio.models, 'generate_content', mock_func):
+        with patch('asyncio.sleep') as mock_sleep:
+            with pytest.raises(ValueError):
+                await model._generate_content(  # pyright: ignore[reportPrivateUsage]
+                    messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
+                    stream=False,
+                    model_settings={},
+                    model_request_parameters=ModelRequestParameters(
+                        function_tools=[], output_tools=[], allow_text_output=True
+                    ),
+                )
+
+            # Should have made only 1 call (no retries for non-JSON errors)
+            assert mock_func.call_count == 1
+            # Should not have slept at all
+            assert mock_sleep.call_count == 0
