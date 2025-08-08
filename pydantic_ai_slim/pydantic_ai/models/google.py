@@ -1,6 +1,8 @@
 from __future__ import annotations as _annotations
 
+import asyncio
 import base64
+import json
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -127,6 +129,18 @@ class GoogleModelSettings(ModelSettings, total=False):
     """The video resolution to use for the model.
 
     See <https://ai.google.dev/api/generate-content#MediaResolution> for more information.
+    """
+
+    google_json_retry_max_attempts: int
+    """Maximum number of retry attempts for JSON decode errors during streaming.
+
+    Defaults to 3. Set to 0 to disable retries.
+    """
+
+    google_json_retry_base_delay: float
+    """Base delay in seconds for exponential backoff between JSON decode error retries.
+
+    Defaults to 1.0. The actual delay will be base_delay * (2 ** attempt_number).
     """
 
 
@@ -321,7 +335,26 @@ class GoogleModel(Model):
     ) -> GenerateContentResponse | Awaitable[AsyncIterator[GenerateContentResponse]]:
         contents, config = await self._build_content_and_config(messages, model_settings, model_request_parameters)
         func = self.client.aio.models.generate_content_stream if stream else self.client.aio.models.generate_content
-        return await func(model=self._model_name, contents=contents, config=config)  # type: ignore
+        
+        # Get retry configuration with defaults
+        max_attempts = model_settings.get('google_json_retry_max_attempts', 3)
+        base_delay = model_settings.get('google_json_retry_base_delay', 1.0)
+
+        # Retry loop for JSON decode errors
+        json_decode_error = None
+        for attempt in range(max_attempts):
+            try:
+                return await func(model=self._model_name, contents=contents, config=config)  # type: ignore
+            except json.JSONDecodeError as error:
+                json_decode_error = error
+                delay = base_delay * (2**attempt)
+                await asyncio.sleep(delay)
+
+        if json_decode_error is None:
+            raise UnexpectedModelBehavior(
+                'JSON retry loop completed without encountering any JSON decode errors. This should not happen if max_attempts > 0.'
+            )
+        raise json_decode_error
 
     async def _build_content_and_config(
         self,
