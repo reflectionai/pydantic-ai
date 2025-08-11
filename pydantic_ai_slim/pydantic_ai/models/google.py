@@ -13,6 +13,7 @@ from uuid import uuid4
 from typing_extensions import assert_never
 
 from .. import UnexpectedModelBehavior, _utils, usage
+from .._json_error_formatter import create_json_error_context, format_json_decode_error
 from .._output import OutputObjectDefinition
 from .._run_context import RunContext
 from ..builtin_tools import CodeExecutionTool, UrlContextTool, WebSearchTool
@@ -580,10 +581,34 @@ class GeminiStreamedResponse(StreamedResponse):
     _timestamp: datetime
     _provider_name: str
 
-    async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        async for chunk in self._response:
-            self._usage = _metadata_as_usage(chunk)
+    async def _iter_chunks_with_json_error_handling(self) -> AsyncIterator[GenerateContentResponse]:
+        """Iterator wrapper that provides enhanced JSON error handling."""
+        chunk_count = 0
+        try:
+            async for chunk in self._response:
+                chunk_count += 1
+                yield chunk
+        except json.JSONDecodeError as e:
+            # Create rich error context with visual formatting
+            error_context = create_json_error_context(e, self._model_name, chunk_count)
+            formatted_json_error = format_json_decode_error(e)
 
+            error_msg = (
+                'Google Gemini streaming response JSON parsing failed. '
+                f'Model: {self._model_name}, processed {chunk_count} chunks before failure.\n\n'
+                f'{formatted_json_error}\n\n'
+                'This typically indicates: (1) Network interruption causing partial JSON chunks, '
+                '(2) Google API server issues returning malformed responses, '
+                '(3) Authentication/authorization problems causing HTML error pages instead of JSON, '
+                '(4) Rate limiting or quota exceeded responses in non-JSON format.\n\n'
+                f'Diagnostic context: {error_context}'
+            )
+
+            raise UnexpectedModelBehavior(error_msg) from e
+
+    async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
+        async for chunk in self._iter_chunks_with_json_error_handling():
+            self._usage = _metadata_as_usage(chunk)
             assert chunk.candidates is not None
             candidate = chunk.candidates[0]
             if candidate.content is None or candidate.content.parts is None:
