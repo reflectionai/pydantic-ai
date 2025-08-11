@@ -3,7 +3,7 @@ from __future__ import annotations as _annotations
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -205,7 +205,7 @@ class GoogleModel(Model):
         check_allow_model_requests()
         model_settings = cast(GoogleModelSettings, model_settings or {})
         response = await self._generate_content(messages, True, model_settings, model_request_parameters)
-        yield await self._process_streamed_response(response)  # type: ignore
+        yield await self._process_streamed_response(response)
 
     @property
     def model_name(self) -> GoogleModelName:
@@ -258,7 +258,7 @@ class GoogleModel(Model):
         stream: Literal[True],
         model_settings: GoogleModelSettings,
         model_request_parameters: ModelRequestParameters,
-    ) -> Awaitable[AsyncIterator[GenerateContentResponse]]: ...
+    ) -> AsyncIterator[GenerateContentResponse]: ...
 
     async def _generate_content(
         self,
@@ -266,7 +266,7 @@ class GoogleModel(Model):
         stream: bool,
         model_settings: GoogleModelSettings,
         model_request_parameters: ModelRequestParameters,
-    ) -> GenerateContentResponse | Awaitable[AsyncIterator[GenerateContentResponse]]:
+    ) -> GenerateContentResponse | AsyncIterator[GenerateContentResponse]:
         tools = self._get_tools(model_request_parameters)
 
         response_mime_type = None
@@ -324,7 +324,7 @@ class GoogleModel(Model):
         json_decode_error = None
         for attempt in range(max_attempts):
             try:
-                return await func(model=self._model_name, contents=contents, config=config)  # type: ignore
+                return await func(model=self._model_name, contents=contents, config=config)
             except json.JSONDecodeError as error:
                 json_decode_error = error
                 delay = base_delay * (2**attempt)
