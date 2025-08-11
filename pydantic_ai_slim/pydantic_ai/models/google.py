@@ -3,7 +3,7 @@ from __future__ import annotations as _annotations
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -275,7 +275,7 @@ class GoogleModel(Model):
         check_allow_model_requests()
         model_settings = cast(GoogleModelSettings, model_settings or {})
         response = await self._generate_content(messages, True, model_settings, model_request_parameters)
-        yield await self._process_streamed_response(response, model_request_parameters)  # type: ignore
+        yield await self._process_streamed_response(response, model_request_parameters)
 
     def _get_tools(self, model_request_parameters: ModelRequestParameters) -> list[ToolDict] | None:
         tools: list[ToolDict] = [
@@ -324,7 +324,7 @@ class GoogleModel(Model):
         stream: Literal[True],
         model_settings: GoogleModelSettings,
         model_request_parameters: ModelRequestParameters,
-    ) -> Awaitable[AsyncIterator[GenerateContentResponse]]: ...
+    ) -> AsyncIterator[GenerateContentResponse]: ...
 
     async def _generate_content(
         self,
@@ -332,7 +332,7 @@ class GoogleModel(Model):
         stream: bool,
         model_settings: GoogleModelSettings,
         model_request_parameters: ModelRequestParameters,
-    ) -> GenerateContentResponse | Awaitable[AsyncIterator[GenerateContentResponse]]:
+    ) -> GenerateContentResponse | AsyncIterator[GenerateContentResponse]:
         contents, config = await self._build_content_and_config(messages, model_settings, model_request_parameters)
         func = self.client.aio.models.generate_content_stream if stream else self.client.aio.models.generate_content
         
