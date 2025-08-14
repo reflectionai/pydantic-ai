@@ -269,7 +269,7 @@ class GoogleModel(Model):
         check_allow_model_requests()
         model_settings = cast(GoogleModelSettings, model_settings or {})
         response = await self._generate_content(messages, True, model_settings, model_request_parameters)
-        yield await self._process_streamed_response(response)
+        yield await self._process_streamed_response(response, model_request_parameters)
 
     @property
     def model_name(self) -> GoogleModelName:
