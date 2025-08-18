@@ -268,7 +268,7 @@ class GoogleModel(Model):
         check_allow_model_requests()
         model_settings = cast(GoogleModelSettings, model_settings or {})
         response = await self._generate_content(messages, True, model_settings, model_request_parameters)
-        yield await self._process_streamed_response(response, model_request_parameters)  # type: ignore
+        yield await self._process_streamed_response(response, model_request_parameters)
 
     @property
     def model_name(self) -> GoogleModelName:
@@ -333,10 +333,10 @@ class GoogleModel(Model):
         stream: bool,
         model_settings: GoogleModelSettings,
         model_request_parameters: ModelRequestParameters,
-    ) -> GenerateContentResponse | Awaitable[AsyncIterator[GenerateContentResponse]]:
+    ) -> GenerateContentResponse | AsyncIterator[GenerateContentResponse]:
         contents, config = await self._build_content_and_config(messages, model_settings, model_request_parameters)
         func = self.client.aio.models.generate_content_stream if stream else self.client.aio.models.generate_content
-        return await func(model=self._model_name, contents=contents, config=config)  # type: ignore
+        return await func(model=self._model_name, contents=contents, config=config)
 
     async def _build_content_and_config(
         self,
