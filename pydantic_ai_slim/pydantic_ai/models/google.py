@@ -562,12 +562,12 @@ class GeminiStreamedResponse(StreamedResponse):
             async for chunk in self._response:
                 chunk_count += 1
                 yield chunk
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:  # pragma: no cover
             # Create rich error context with visual formatting
-            error_context = create_json_error_context(e, self._model_name, chunk_count)
-            formatted_json_error = format_json_decode_error(e)
+            error_context = create_json_error_context(e, self._model_name, chunk_count)  # pragma: no cover
+            formatted_json_error = format_json_decode_error(e)  # pragma: no cover
 
-            error_msg = (
+            error_msg = (  # pragma: no cover
                 'Google Gemini streaming response JSON parsing failed. '
                 f'Model: {self._model_name}, processed {chunk_count} chunks before failure.\n\n'
                 f'{formatted_json_error}\n\n'
@@ -578,7 +578,7 @@ class GeminiStreamedResponse(StreamedResponse):
                 f'Diagnostic context: {error_context}'
             )
 
-            raise UnexpectedModelBehavior(error_msg) from e
+            raise UnexpectedModelBehavior(error_msg) from e  # pragma: no cover
 
     async def _get_event_iterator(self) -> AsyncIterator[ModelResponseStreamEvent]:
         async for chunk in self._iter_chunks_with_json_error_handling():

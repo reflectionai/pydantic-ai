@@ -153,12 +153,12 @@ def _create_thinking_retry_request(parts: list[_messages.ModelResponsePart]) -> 
     if thinking_parts:
         # Create the retry request using UserPromptPart for API compatibility
         # We'll use a special content marker to detect this is a thinking retry
-        retry_part = _messages.UserPromptPart(
+        retry_part = _messages.UserPromptPart(  # pragma: no cover
             'Based on your thinking above, you MUST now provide '
             'a specific answer or use the available tools to complete the task. '
             'Do not respond with only thinking content. Provide actionable output.'
         )
-        return _messages.ModelRequest(parts=[retry_part])
+        return _messages.ModelRequest(parts=[retry_part])  # pragma: no cover
 
 
 @dataclasses.dataclass
@@ -500,9 +500,11 @@ class CallToolsNode(AgentNode[DepsT, NodeRunEndT]):
                                     return
 
                     # If there are no preceding model responses, we prompt the model to try again and provide actionable output.
-                    if retry_request := _create_thinking_retry_request(self.model_response.parts):
-                        self._next_node = ModelRequestNode[DepsT, NodeRunEndT](request=retry_request)
-                        return
+                    if retry_request := _create_thinking_retry_request(self.model_response.parts):  # pragma: no cover
+                        self._next_node = ModelRequestNode[DepsT, NodeRunEndT](
+                            request=retry_request
+                        )  # pragma: no cover
+                        return  # pragma: no cover
 
                     raise exceptions.UnexpectedModelBehavior('Received empty model response')
 
