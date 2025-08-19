@@ -71,8 +71,9 @@ jobs:
         # always build docs to check it works without insiders packages
       - run: make docs
 
-      - run: make docs-insiders
-        if: github.event.pull_request.head.repo.full_name == github.repository || github.ref == 'refs/heads/main'
+      - name: Build docs with insiders packages
+        run: make docs-insiders
+        if: (github.event.pull_request.head.repo.full_name == github.repository || github.ref == 'refs/heads/main') && env.PPPR_TOKEN != ''
         env:
           PPPR_TOKEN: ${{ secrets.PPPR_TOKEN }}
 
