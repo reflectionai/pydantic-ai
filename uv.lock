@@ -3330,6 +3330,7 @@ logfire = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "anthropic" },
     { name = "anyio" },
     { name = "asgi-lifespan" },
     { name = "boto3-stubs", extra = ["bedrock-runtime"] },
@@ -3341,7 +3342,10 @@ dev = [
     { name = "duckduckgo-search" },
     { name = "genai-prices" },
     { name = "google-genai" },
+    { name = "groq" },
     { name = "inline-snapshot" },
+    { name = "mistralai" },
+    { name = "openai" },
     { name = "pip" },
     { name = "pytest" },
     { name = "pytest-examples" },
@@ -3382,6 +3386,7 @@ provides-extras = ["a2a", "examples", "logfire"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "anthropic", specifier = ">=0.61.0" },
     { name = "anyio", specifier = ">=4.5.0" },
     { name = "asgi-lifespan", specifier = ">=2.1.0" },
     { name = "boto3-stubs", extras = ["bedrock-runtime"] },
@@ -3392,7 +3397,10 @@ dev = [
     { name = "duckduckgo-search", specifier = ">=7.0.0" },
     { name = "genai-prices", specifier = ">=0.0.22" },
     { name = "google-genai", specifier = ">=1.28.0" },
+    { name = "groq", specifier = ">=0.25.0" },
     { name = "inline-snapshot", specifier = ">=0.19.3" },
+    { name = "mistralai", specifier = ">=1.9.2" },
+    { name = "openai", specifier = ">=1.99.9" },
     { name = "pip", specifier = ">=25.2" },
     { name = "pytest", specifier = ">=8.3.3" },
     { name = "pytest-examples", specifier = ">=0.0.18" },
