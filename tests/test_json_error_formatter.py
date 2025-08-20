@@ -72,7 +72,7 @@ def test_extract_json_error_info(test_case: dict[str, Any]):
         # Parse real JSON to get actual error
         try:
             json.loads(test_case['json_input'])
-            pytest.fail('Expected JSONDecodeError but parsing succeeded')
+            pytest.fail('Expected JSONDecodeError but parsing succeeded')  # pragma: no cover
         except json.JSONDecodeError as e:
             # For real JSON errors, some values vary by implementation
             expected = JsonErrorInfo(

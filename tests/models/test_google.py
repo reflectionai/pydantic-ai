@@ -1,11 +1,8 @@
 from __future__ import annotations as _annotations
 
 import datetime
-import json
 import os
-from dataclasses import dataclass
-from typing import Any, cast
-from unittest.mock import AsyncMock, Mock, patch
+from typing import Any
 
 import pytest
 from httpx import Timeout
@@ -13,11 +10,15 @@ from inline_snapshot import Is, snapshot
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+from pydantic_ai import UsageLimitExceeded
 from pydantic_ai.agent import Agent
+from pydantic_ai.builtin_tools import CodeExecutionTool, WebSearchTool
 from pydantic_ai.exceptions import ModelRetry, UnexpectedModelBehavior, UserError
 from pydantic_ai.messages import (
     AudioUrl,
     BinaryContent,
+    BuiltinToolCallPart,
+    BuiltinToolReturnPart,
     DocumentUrl,
     FinalResultEvent,
     FunctionToolCallEvent,
@@ -38,15 +39,16 @@ from pydantic_ai.messages import (
     UserPromptPart,
     VideoUrl,
 )
-from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
 from pydantic_ai.output import NativeOutput, PromptedOutput, TextOutput, ToolOutput
-from pydantic_ai.result import Usage
+from pydantic_ai.result import Usage, UsageLimits
+from pydantic_ai.settings import ModelSettings
 
 from ..conftest import IsDatetime, IsInstance, IsStr, try_import
+from ..parts_from_messages import part_types_from_messages
 
 with try_import() as imports_successful:
-    from google.genai.types import HarmBlockThreshold, HarmCategory
+    from google.genai.types import CodeExecutionResult, HarmBlockThreshold, HarmCategory, Language, Outcome
 
     from pydantic_ai.models.google import GoogleModel, GoogleModelSettings
     from pydantic_ai.providers.google import GoogleProvider
@@ -323,7 +325,9 @@ async def test_google_model_gla_labels_raises_value_error(allow_model_requests: 
         await agent.run('What is the capital of France?')
 
 
-async def test_google_model_vertex_provider(allow_model_requests: None, vertex_provider: GoogleProvider):
+async def test_google_model_vertex_provider(
+    allow_model_requests: None, vertex_provider: GoogleProvider
+):  # pragma: lax no cover
     model = GoogleModel('gemini-2.0-flash', provider=vertex_provider)
     agent = Agent(model=model, system_prompt='You are a helpful chatbot.')
     result = await agent.run('What is the capital of France?')
@@ -601,6 +605,293 @@ async def test_google_model_safety_settings(allow_model_requests: None, google_p
         await agent.run('Tell me a joke about a Brazilians.')
 
 
+async def test_google_model_web_search_tool(allow_model_requests: None, google_provider: GoogleProvider):
+    m = GoogleModel('gemini-2.0-flash', provider=google_provider)
+    agent = Agent(m, system_prompt='You are a helpful chatbot.', builtin_tools=[WebSearchTool()])
+
+    result = await agent.run('What day is today in Utrecht?')
+    assert result.output == snapshot('Today is Wednesday, May 28, 2025, in Utrecht.\n')
+
+
+async def test_google_model_code_execution_tool(allow_model_requests: None, google_provider: GoogleProvider):
+    m = GoogleModel('gemini-2.0-flash', provider=google_provider)
+    agent = Agent(m, system_prompt='You are a helpful chatbot.', builtin_tools=[CodeExecutionTool()])
+
+    result = await agent.run('What day is today in Utrecht?')
+    assert result.all_messages() == snapshot(
+        [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content='You are a helpful chatbot.', timestamp=IsDatetime()),
+                    UserPromptPart(content='What day is today in Utrecht?', timestamp=IsDatetime()),
+                ]
+            ),
+            ModelResponse(
+                parts=[
+                    TextPart(
+                        content="""\
+To determine the day of the week in Utrecht, I need to know the current date. I will use the python tool to get the current date and time, and then extract the day of the week.
+
+"""
+                    ),
+                    BuiltinToolCallPart(
+                        tool_name='code_execution',
+                        args={
+                            'code': """\
+import datetime
+
+now = datetime.datetime.now()
+day_of_week = now.strftime("%A")
+print(f'{day_of_week=}')
+""",
+                            'language': Language.PYTHON,
+                        },
+                        tool_call_id=IsStr(),
+                        provider_name='google',
+                    ),
+                    BuiltinToolReturnPart(
+                        tool_name='code_execution',
+                        content=CodeExecutionResult(outcome=Outcome.OUTCOME_OK, output="day_of_week='Thursday'\n"),
+                        tool_call_id='not_provided',
+                        timestamp=IsDatetime(),
+                        provider_name='google',
+                    ),
+                    TextPart(content='Today is Thursday in Utrecht.\n'),
+                ],
+                usage=Usage(
+                    requests=1,
+                    request_tokens=13,
+                    response_tokens=95,
+                    total_tokens=209,
+                    details={
+                        'tool_use_prompt_tokens': 101,
+                        'text_candidates_tokens': 95,
+                        'text_prompt_tokens': 13,
+                        'text_tool_use_prompt_tokens': 101,
+                    },
+                ),
+                model_name='gemini-2.0-flash',
+                timestamp=IsDatetime(),
+                vendor_details={'finish_reason': 'STOP'},
+            ),
+        ]
+    )
+
+    result = await agent.run('What day is tomorrow?', message_history=result.all_messages())
+    assert result.all_messages() == snapshot(
+        [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(content='You are a helpful chatbot.', timestamp=IsDatetime()),
+                    UserPromptPart(content='What day is today in Utrecht?', timestamp=IsDatetime()),
+                ]
+            ),
+            ModelResponse(
+                parts=[
+                    TextPart(
+                        content="""\
+To determine the day of the week in Utrecht, I need to know the current date. I will use the python tool to get the current date and time, and then extract the day of the week.
+
+"""
+                    ),
+                    BuiltinToolCallPart(
+                        tool_name='code_execution',
+                        args={
+                            'code': """\
+import datetime
+
+now = datetime.datetime.now()
+day_of_week = now.strftime("%A")
+print(f'{day_of_week=}')
+""",
+                            'language': Language.PYTHON,
+                        },
+                        tool_call_id=IsStr(),
+                        provider_name='google',
+                    ),
+                    BuiltinToolReturnPart(
+                        tool_name='code_execution',
+                        content=CodeExecutionResult(outcome=Outcome.OUTCOME_OK, output="day_of_week='Thursday'\n"),
+                        tool_call_id='not_provided',
+                        timestamp=IsDatetime(),
+                        provider_name='google',
+                    ),
+                    TextPart(content='Today is Thursday in Utrecht.\n'),
+                ],
+                usage=Usage(
+                    requests=1,
+                    request_tokens=13,
+                    response_tokens=95,
+                    total_tokens=209,
+                    details={
+                        'tool_use_prompt_tokens': 101,
+                        'text_candidates_tokens': 95,
+                        'text_prompt_tokens': 13,
+                        'text_tool_use_prompt_tokens': 101,
+                    },
+                ),
+                model_name='gemini-2.0-flash',
+                timestamp=IsDatetime(),
+                vendor_details={'finish_reason': 'STOP'},
+            ),
+            ModelRequest(parts=[UserPromptPart(content='What day is tomorrow?', timestamp=IsDatetime())]),
+            ModelResponse(
+                parts=[
+                    TextPart(
+                        content="""\
+To determine what day is tomorrow, I'll use the python tool to calculate tomorrow's date and then find the corresponding day of the week.
+
+"""
+                    ),
+                    BuiltinToolCallPart(
+                        tool_name='code_execution',
+                        args={
+                            'code': """\
+import datetime
+
+today = datetime.date.today()
+tomorrow = today + datetime.timedelta(days=1)
+day_of_week = tomorrow.strftime("%A")
+print(f'{day_of_week=}')
+""",
+                            'language': Language.PYTHON,
+                        },
+                        tool_call_id=IsStr(),
+                        provider_name='google',
+                    ),
+                    BuiltinToolReturnPart(
+                        tool_name='code_execution',
+                        content=CodeExecutionResult(outcome=Outcome.OUTCOME_OK, output="day_of_week='Friday'\n"),
+                        tool_call_id='not_provided',
+                        timestamp=IsDatetime(),
+                        provider_name='google',
+                    ),
+                    TextPart(content='Tomorrow is Friday.\n'),
+                ],
+                usage=Usage(
+                    requests=1,
+                    request_tokens=113,
+                    response_tokens=95,
+                    total_tokens=411,
+                    details={
+                        'tool_use_prompt_tokens': 203,
+                        'text_candidates_tokens': 95,
+                        'text_prompt_tokens': 113,
+                        'text_tool_use_prompt_tokens': 203,
+                    },
+                ),
+                model_name='gemini-2.0-flash',
+                timestamp=IsDatetime(),
+                vendor_details={'finish_reason': 'STOP'},
+            ),
+        ]
+    )
+
+
+async def test_google_model_server_tool_receive_history_from_another_provider(
+    allow_model_requests: None, anthropic_api_key: str, gemini_api_key: str
+):
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.providers.anthropic import AnthropicProvider
+
+    anthropic_model = AnthropicModel('claude-sonnet-4-0', provider=AnthropicProvider(api_key=anthropic_api_key))
+    google_model = GoogleModel('gemini-2.0-flash', provider=GoogleProvider(api_key=gemini_api_key))
+    agent = Agent(builtin_tools=[CodeExecutionTool()])
+
+    result = await agent.run('How much is 3 * 12390?', model=anthropic_model)
+    assert part_types_from_messages(result.all_messages()) == snapshot(
+        [[UserPromptPart], [TextPart, BuiltinToolCallPart, BuiltinToolReturnPart, TextPart]]
+    )
+
+    result = await agent.run('Multiplied by 12390', model=google_model, message_history=result.all_messages())
+    assert part_types_from_messages(result.all_messages()) == snapshot(
+        [
+            [UserPromptPart],
+            [TextPart, BuiltinToolCallPart, BuiltinToolReturnPart, TextPart],
+            [UserPromptPart],
+            [TextPart, BuiltinToolCallPart, BuiltinToolReturnPart, TextPart],
+        ]
+    )
+
+
+async def test_google_model_receive_web_search_history_from_another_provider(
+    allow_model_requests: None, anthropic_api_key: str, gemini_api_key: str
+):
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.providers.anthropic import AnthropicProvider
+
+    anthropic_model = AnthropicModel('claude-sonnet-4-0', provider=AnthropicProvider(api_key=anthropic_api_key))
+    anthropic_agent = Agent(model=anthropic_model, builtin_tools=[WebSearchTool()])
+
+    result = await anthropic_agent.run('What are the latest news in the Netherlands?')
+    assert part_types_from_messages(result.all_messages()) == snapshot(
+        [
+            [UserPromptPart],
+            [
+                BuiltinToolCallPart,
+                BuiltinToolReturnPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+            ],
+        ]
+    )
+
+    google_model = GoogleModel('gemini-2.0-flash', provider=GoogleProvider(api_key=gemini_api_key))
+    google_agent = Agent(model=google_model)
+    result = await google_agent.run('What day is tomorrow?', message_history=result.all_messages())
+    assert part_types_from_messages(result.all_messages()) == snapshot(
+        [
+            [UserPromptPart],
+            [
+                BuiltinToolCallPart,
+                BuiltinToolReturnPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+                TextPart,
+            ],
+            [UserPromptPart],
+            [TextPart],
+        ]
+    )
+
+
 async def test_google_model_empty_user_prompt(allow_model_requests: None, google_provider: GoogleProvider):
     m = GoogleModel('gemini-1.5-flash', provider=google_provider)
     agent = Agent(m, instructions='You are a helpful assistant.')
@@ -779,7 +1070,7 @@ async def test_google_url_input(
     expected_output: str,
     allow_model_requests: None,
     vertex_provider: GoogleProvider,
-) -> None:
+) -> None:  # pragma: lax no cover
     m = GoogleModel('gemini-2.0-flash', provider=vertex_provider)
     agent = Agent(m)
     result = await agent.run(['What is the main content of this URL?', url])
@@ -811,7 +1102,7 @@ async def test_google_url_input(
     not os.getenv('CI', False), reason='Requires properly configured local google vertex config to pass'
 )
 @pytest.mark.vcr()
-async def test_google_url_input_force_download(allow_model_requests: None) -> None:
+async def test_google_url_input_force_download(allow_model_requests: None) -> None:  # pragma: lax no cover
     provider = GoogleProvider(project='pydantic-ai', location='us-central1')
     m = GoogleModel('gemini-2.0-flash', provider=provider)
     agent = Agent(m)
@@ -1440,140 +1731,53 @@ async def test_google_model_function_call_without_text(google_provider: GooglePr
     assert parts[1]['text'] == 'I have completed the function calls above.'
 
 
-@dataclass
-class JsonRetryTestCase:
-    """Test case for JSON retry scenarios."""
+async def test_google_model_usage_limit_exceeded(allow_model_requests: None, google_provider: GoogleProvider):
+    model = GoogleModel('gemini-2.5-flash', provider=google_provider)
+    agent = Agent(model=model)
 
-    id: str
-    side_effect: list[json.JSONDecodeError | Mock]
-    settings: GoogleModelSettings
-    expected_exception: type[Exception] | None
-    expected_call_count: int
-    expected_sleep_count: int
-    expected_sleep_calls: list[float]
-    expected_result: str | None
-
-
-@pytest.mark.parametrize(
-    'test_case',
-    [
-        JsonRetryTestCase(
-            id='success_after_retry',
-            side_effect=[json.JSONDecodeError('test error', 'doc', 0), Mock()],
-            settings=cast(GoogleModelSettings, {}),
-            expected_exception=None,
-            expected_call_count=2,
-            expected_sleep_count=1,
-            expected_sleep_calls=[1.0],
-            expected_result='success',
-        ),
-        JsonRetryTestCase(
-            id='max_attempts_reached',
-            side_effect=[json.JSONDecodeError('test error', 'doc', 0), json.JSONDecodeError('test error', 'doc', 0)],
-            settings=cast(GoogleModelSettings, {'google_json_retry_max_attempts': 2}),
-            expected_exception=json.JSONDecodeError,
-            expected_call_count=2,
-            expected_sleep_count=2,
-            expected_sleep_calls=[1.0, 2.0],
-            expected_result=None,
-        ),
-        JsonRetryTestCase(
-            id='custom_settings',
-            side_effect=[json.JSONDecodeError('test error', 'doc', 0), Mock()],
-            settings=cast(
-                GoogleModelSettings, {'google_json_retry_max_attempts': 5, 'google_json_retry_base_delay': 0.5}
-            ),
-            expected_exception=None,
-            expected_call_count=2,
-            expected_sleep_count=1,
-            expected_sleep_calls=[0.5],
-            expected_result='success',
-        ),
-        JsonRetryTestCase(
-            id='retry_disabled',
-            side_effect=[json.JSONDecodeError('test error', 'doc', 0)],
-            settings=cast(GoogleModelSettings, {'google_json_retry_max_attempts': 0}),
-            expected_exception=UnexpectedModelBehavior,
-            expected_call_count=0,
-            expected_sleep_count=0,
-            expected_sleep_calls=[],
-            expected_result=None,
-        ),
-    ],
-    ids=lambda test_case: test_case.id,
-)
-async def test_google_model_json_retry_scenarios(
-    google_provider: GoogleProvider,
-    test_case: JsonRetryTestCase,
-):
-    """Test various JSON retry scenarios with parameterized inputs."""
-    model = GoogleModel('gemini-1.5-flash', provider=google_provider)
-
-    # Create mock response for success cases
-    expected_result = test_case.expected_result
-    side_effect = test_case.side_effect
-    if expected_result == 'success':
-        mock_response = Mock()
-        if isinstance(side_effect, list):
-            side_effect[1] = mock_response  # Replace placeholder with actual mock
-        expected_result = mock_response
-
-    mock_func = AsyncMock()
-    mock_func.side_effect = side_effect
-
-    with patch.object(model.client.aio.models, 'generate_content', mock_func):
-        with patch('asyncio.sleep') as mock_sleep:
-            if test_case.expected_exception:
-                with pytest.raises(test_case.expected_exception):
-                    await model._generate_content(  # pyright: ignore[reportPrivateUsage]
-                        messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
-                        stream=False,
-                        model_settings=test_case.settings,
-                        model_request_parameters=ModelRequestParameters(
-                            function_tools=[], output_tools=[], allow_text_output=True
-                        ),
-                    )
-            else:
-                result = await model._generate_content(  # pyright: ignore[reportPrivateUsage]
-                    messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
-                    stream=False,
-                    model_settings=test_case.settings,
-                    model_request_parameters=ModelRequestParameters(
-                        function_tools=[], output_tools=[], allow_text_output=True
-                    ),
-                )
-                assert result == expected_result
-
-            # Verify call counts
-            assert mock_func.call_count == test_case.expected_call_count
-            assert mock_sleep.call_count == test_case.expected_sleep_count
-
-            # Verify sleep calls
-            for expected_delay in test_case.expected_sleep_calls:
-                mock_sleep.assert_any_call(expected_delay)
+    with pytest.raises(
+        UsageLimitExceeded, match='The next request would exceed the request_tokens_limit of 9 \\(request_tokens=12\\)'
+    ):
+        await agent.run(
+            'The quick brown fox jumps over the lazydog.',
+            usage_limits=UsageLimits(request_tokens_limit=9, count_tokens_before_request=True),
+        )
 
 
-async def test_google_model_non_json_error_not_retried(google_provider: GoogleProvider):
-    """Test that non-JSON errors are not retried."""
-    model = GoogleModel('gemini-1.5-flash', provider=google_provider)
+async def test_google_model_usage_limit_not_exceeded(allow_model_requests: None, google_provider: GoogleProvider):
+    model = GoogleModel('gemini-2.5-flash', provider=google_provider)
+    agent = Agent(model=model)
 
-    # Mock the Google client to raise a different type of error
-    mock_func = AsyncMock()
-    mock_func.side_effect = ValueError('some other error')
+    result = await agent.run(
+        'The quick brown fox jumps over the lazydog.',
+        usage_limits=UsageLimits(request_tokens_limit=15, count_tokens_before_request=True),
+    )
+    assert result.output == snapshot("""\
+That's a classic! It's famously known as a **pangram**, which means it's a sentence that contains every letter of the alphabet.
 
-    with patch.object(model.client.aio.models, 'generate_content', mock_func):
-        with patch('asyncio.sleep') as mock_sleep:
-            with pytest.raises(ValueError):
-                await model._generate_content(  # pyright: ignore[reportPrivateUsage]
-                    messages=[ModelRequest(parts=[UserPromptPart(content='test')])],
-                    stream=False,
-                    model_settings={},
-                    model_request_parameters=ModelRequestParameters(
-                        function_tools=[], output_tools=[], allow_text_output=True
-                    ),
-                )
+It's often used for:
+*   **Typing practice:** To ensure all keys are hit.
+*   **Displaying font samples:** Because it showcases every character.
 
-            # Should have made only 1 call (no retries for non-JSON errors)
-            assert mock_func.call_count == 1
-            # Should not have slept at all
-            assert mock_sleep.call_count == 0
+Just a small note, it's typically written as "lazy dog" (two words) and usually ends with a period:
+
+**The quick brown fox jumps over the lazy dog.**\
+""")
+
+
+async def test_google_vertexai_model_usage_limit_exceeded(allow_model_requests: None, vertex_provider: GoogleProvider):
+    model = GoogleModel('gemini-2.0-flash', provider=vertex_provider, settings=ModelSettings(max_tokens=100))
+
+    agent = Agent(model, system_prompt='You are a chatbot.')
+
+    @agent.tool_plain
+    async def get_user_country() -> str:
+        return 'Mexico'  # pragma: no cover
+
+    with pytest.raises(
+        UsageLimitExceeded, match='The next request would exceed the total_tokens_limit of 9 \\(total_tokens=36\\)'
+    ):
+        await agent.run(
+            'What is the largest city in the user country? Use the get_user_country tool and then your own world knowledge.',
+            usage_limits=UsageLimits(total_tokens_limit=9, count_tokens_before_request=True),
+        )

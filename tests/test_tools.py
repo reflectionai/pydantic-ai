@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, Callable, Literal, Union
 
@@ -387,7 +388,7 @@ def test_docstring_unknown():
         {
             'name': 'unknown_docstring',
             'description': 'Unknown style docstring.',
-            'parameters_json_schema': {'properties': {}, 'type': 'object'},
+            'parameters_json_schema': {'additionalProperties': {'type': 'integer'}, 'properties': {}, 'type': 'object'},
             'outer_typed_dict_key': None,
             'strict': None,
             'kind': 'function',
@@ -616,7 +617,9 @@ def test_tool_return_conflict():
     # this raises an error
     with pytest.raises(
         UserError,
-        match="Function toolset defines a tool whose name conflicts with existing tool from Output toolset: 'ctx_tool'. Rename the tool or wrap the toolset in a `PrefixedToolset` to avoid name conflicts.",
+        match=re.escape(
+            "The agent defines a tool whose name conflicts with existing tool from the agent's output tools: 'ctx_tool'. Rename the tool or wrap the toolset in a `PrefixedToolset` to avoid name conflicts."
+        ),
     ):
         Agent('test', tools=[ctx_tool], deps_type=int, output_type=ToolOutput(int, name='ctx_tool')).run_sync(
             '', deps=0
@@ -626,7 +629,9 @@ def test_tool_return_conflict():
 def test_tool_name_conflict_hint():
     with pytest.raises(
         UserError,
-        match="Prefixed toolset defines a tool whose name conflicts with existing tool from Function toolset: 'foo_tool'. Rename the tool or wrap the toolset in a `PrefixedToolset` to avoid name conflicts.",
+        match=re.escape(
+            "PrefixedToolset(FunctionToolset 'tool') defines a tool whose name conflicts with existing tool from the agent: 'foo_tool'. Change the `prefix` attribute to avoid name conflicts."
+        ),
     ):
 
         def tool(x: int) -> int:
@@ -635,7 +640,7 @@ def test_tool_name_conflict_hint():
         def foo_tool(x: str) -> str:
             return x + 'foo'  # pragma: no cover
 
-        function_toolset = FunctionToolset([tool])
+        function_toolset = FunctionToolset([tool], id='tool')
         prefixed_toolset = PrefixedToolset(function_toolset, 'foo')
         Agent('test', tools=[foo_tool], toolsets=[prefixed_toolset]).run_sync('')
 
@@ -932,7 +937,7 @@ def test_json_schema_required_parameters():
                 'outer_typed_dict_key': None,
                 'parameters_json_schema': {
                     'additionalProperties': False,
-                    'properties': {'a': {'type': 'integer'}, 'b': {'type': 'integer'}},
+                    'properties': {'a': {'type': 'integer'}, 'b': {'default': 1, 'type': 'integer'}},
                     'required': ['a'],
                     'type': 'object',
                 },
@@ -945,7 +950,7 @@ def test_json_schema_required_parameters():
                 'outer_typed_dict_key': None,
                 'parameters_json_schema': {
                     'additionalProperties': False,
-                    'properties': {'a': {'type': 'integer'}, 'b': {'type': 'integer'}},
+                    'properties': {'a': {'default': 1, 'type': 'integer'}, 'b': {'type': 'integer'}},
                     'required': ['b'],
                     'type': 'object',
                 },
@@ -1031,7 +1036,8 @@ def test_schema_generator():
                 'name': 'my_tool_1',
                 'outer_typed_dict_key': None,
                 'parameters_json_schema': {
-                    'properties': {'x': {'type': 'string'}},
+                    'additionalProperties': True,
+                    'properties': {'x': {'default': None, 'type': 'string'}},
                     'type': 'object',
                 },
                 'strict': None,
@@ -1042,7 +1048,7 @@ def test_schema_generator():
                 'name': 'my_tool_2',
                 'outer_typed_dict_key': None,
                 'parameters_json_schema': {
-                    'properties': {'x': {'type': 'string', 'title': 'X title'}},
+                    'properties': {'x': {'default': None, 'type': 'string', 'title': 'X title'}},
                     'type': 'object',
                 },
                 'strict': None,
@@ -1071,7 +1077,6 @@ def test_tool_parameters_with_attribute_docstrings():
             'name': 'get_score',
             'description': None,
             'parameters_json_schema': {
-                'additionalProperties': False,
                 'properties': {
                     'a': {'description': 'The first parameter', 'type': 'integer'},
                     'b': {'description': 'The second parameter', 'type': 'integer'},
@@ -1221,10 +1226,9 @@ def test_tool_retries():
     with pytest.raises(UnexpectedModelBehavior, match="Tool 'infinite_retry_tool' exceeded max retries count of 5"):
         agent.run_sync('Begin infinite retry loop!')
 
-    # There are extra 0s here because the toolset is prepared once ahead of the graph run, before the user prompt part is added in.
-    assert prepare_tools_retries == [0, 0, 1, 2, 3, 4, 5]
-    assert prepare_retries == [0, 0, 1, 2, 3, 4, 5]
-    assert call_retries == [0, 1, 2, 3, 4, 5]
+    assert prepare_tools_retries == snapshot([0, 1, 2, 3, 4, 5])
+    assert prepare_retries == snapshot([0, 1, 2, 3, 4, 5])
+    assert call_retries == snapshot([0, 1, 2, 3, 4, 5])
 
 
 def test_deferred_tool():
