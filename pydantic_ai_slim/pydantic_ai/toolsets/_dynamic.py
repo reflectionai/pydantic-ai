@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable
-from dataclasses import dataclass, replace
 from typing import Any, Callable, Union
 
 from typing_extensions import Self, TypeAlias
@@ -17,7 +16,6 @@ ToolsetFunc: TypeAlias = Callable[
 """A sync/async function which takes a run context and returns a toolset."""
 
 
-@dataclass
 class DynamicToolset(AbstractToolset[AgentDepsT]):
     """A toolset that dynamically builds a toolset using a function that takes the run context.
 
@@ -26,14 +24,34 @@ class DynamicToolset(AbstractToolset[AgentDepsT]):
     """
 
     toolset_func: ToolsetFunc[AgentDepsT]
-    per_run_step: bool = True
+    per_run_step: bool
+    _id: str | None
 
-    _toolset: AbstractToolset[AgentDepsT] | None = None
-    _run_step: int | None = None
+    _toolset: AbstractToolset[AgentDepsT] | None
+    _run_step: int | None
+
+    def __init__(self, toolset_func: ToolsetFunc[AgentDepsT], per_run_step: bool = True, id: str | None = None):
+        self.toolset_func = toolset_func
+        self.per_run_step = per_run_step
+        self._id = id
+
+        self._toolset = None
+        self._run_step = None
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, DynamicToolset):
+            return False
+        return (
+            self.toolset_func == other.toolset_func  # pyright: ignore[reportUnknownMemberType]
+            and self.per_run_step == other.per_run_step
+            and self._id == other._id
+            and self._toolset == other._toolset  # pyright: ignore[reportUnknownMemberType]
+            and self._run_step == other._run_step
+        )
 
     @property
     def id(self) -> str | None:
-        return None  # pragma: no cover
+        return self._id
 
     async def __aenter__(self) -> Self:
         return self
@@ -84,4 +102,8 @@ class DynamicToolset(AbstractToolset[AgentDepsT]):
         if self._toolset is None:
             return super().visit_and_replace(visitor)
         else:
-            return replace(self, _toolset=self._toolset.visit_and_replace(visitor))
+            # Create a new instance with the same config but visited _toolset
+            new_instance = DynamicToolset(self.toolset_func, self.per_run_step, self._id)
+            new_instance._toolset = self._toolset.visit_and_replace(visitor)
+            new_instance._run_step = self._run_step
+            return new_instance

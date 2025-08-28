@@ -1145,6 +1145,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         /,
         *,
         per_run_step: bool = True,
+        id: str | None = None,
     ) -> Callable[[ToolsetFunc[AgentDepsT]], ToolsetFunc[AgentDepsT]]: ...
 
     def toolset(
@@ -1153,6 +1154,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         /,
         *,
         per_run_step: bool = True,
+        id: str | None = None,
     ) -> Any:
         """Decorator to register a toolset function which takes [`RunContext`][pydantic_ai.tools.RunContext] as its only argument.
 
@@ -1172,13 +1174,21 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
             return FunctionToolset()
         ```
 
+        Example with id for TemporalAgent compatibility:
+        ```python
+        @agent.toolset(id="my-mcp-toolset")
+        async def mcp_toolset(ctx: RunContext[str]) -> AbstractToolset[str]:
+            return mcp_client
+        ```
+
         Args:
             func: The toolset function to register.
             per_run_step: Whether to re-evaluate the toolset for each run step. Defaults to True.
+            id: Optional unique identifier for the toolset, required for TemporalAgent compatibility.
         """
 
         def toolset_decorator(func_: ToolsetFunc[AgentDepsT]) -> ToolsetFunc[AgentDepsT]:
-            self._dynamic_toolsets.append(DynamicToolset(func_, per_run_step=per_run_step))
+            self._dynamic_toolsets.append(DynamicToolset(func_, per_run_step=per_run_step, id=id))
             return func_
 
         return toolset_decorator if func is None else toolset_decorator(func)

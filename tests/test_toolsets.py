@@ -671,18 +671,25 @@ async def test_visit_and_replace():
         ]
     )
     visited_toolset = toolset.visit_and_replace(lambda toolset: WrapperToolset(toolset))
-    assert visited_toolset == CombinedToolset(
+
+    # Build the expected result with complete objects
+    expected_active_dynamic = DynamicToolset(
+        toolset_func=active_dynamic_toolset.toolset_func,
+        per_run_step=active_dynamic_toolset.per_run_step,
+    )
+    # Set the internal state to match what visit_and_replace should produce
+    expected_active_dynamic._toolset = WrapperToolset(toolset2)  # pyright: ignore[reportPrivateUsage]
+    expected_active_dynamic._run_step = active_dynamic_toolset._run_step  # pyright: ignore[reportPrivateUsage]
+
+    expected_toolset = CombinedToolset(
         [
             WrapperToolset(WrapperToolset(toolset1)),
-            DynamicToolset(
-                toolset_func=active_dynamic_toolset.toolset_func,
-                per_run_step=active_dynamic_toolset.per_run_step,
-                _toolset=WrapperToolset(toolset2),
-                _run_step=active_dynamic_toolset._run_step,  # pyright: ignore[reportPrivateUsage]
-            ),
+            expected_active_dynamic,
             WrapperToolset(inactive_dynamic_toolset),
         ]
     )
+
+    assert visited_toolset == expected_toolset
 
 
 async def test_dynamic_toolset():
@@ -772,3 +779,26 @@ async def test_dynamic_toolset_empty():
         assert tools == {}
 
         assert toolset._toolset is None  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_dynamic_toolset_id():
+    """Test that DynamicToolset correctly handles the id parameter."""
+    # Test without id (default None)
+    toolset_no_id = DynamicToolset(toolset_func=lambda ctx: FunctionToolset())
+    assert toolset_no_id.id is None
+
+    # Test with id
+    toolset_with_id = DynamicToolset(
+        toolset_func=lambda ctx: FunctionToolset(),
+        id='custom-toolset'
+    )
+    assert toolset_with_id.id == 'custom-toolset'
+
+    # Test with id and per_run_step
+    toolset_full = DynamicToolset(
+        toolset_func=lambda ctx: FunctionToolset(),
+        per_run_step=False,
+        id='another-toolset'
+    )
+    assert toolset_full.id == 'another-toolset'
+    assert toolset_full.per_run_step is False
